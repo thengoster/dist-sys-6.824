@@ -711,6 +711,139 @@ func TestSnapshotRecover3B(t *testing.T) {
 	GenericTest(t, "3B", 1, false, true, false, 1000)
 }
 
+func TestDAMO3B(t *testing.T) {
+	// Test: restarts, snapshots, many clients (3B) ...
+	GenericTestDAMO(t, "3B", 20, false, true, false, 1000)
+}
+
+// Basic test is as follows: one or more clients submitting Append/Get
+// operations to set of servers for some period of time.  After the period is
+// over, test checks that all appended values are present and in order for a
+// particular key.  If unreliable is set, RPCs may fail.  If crash is set, the
+// servers crash after the period is over and restart.  If partitions is set,
+// the test repartitions the network concurrently with the clients and servers. If
+// maxraftstate is a positive number, the size of the state for Raft (i.e., log
+// size) shouldn't exceed 8*maxraftstate. If maxraftstate is negative,
+// snapshots shouldn't be used.
+func GenericTestDAMO(t *testing.T, part string, nclients int, unreliable bool, crash bool, partitions bool, maxraftstate int) {
+
+	title := "Test: DAMO"
+
+	const nservers = 3
+	cfg := make_config(t, nservers, unreliable, maxraftstate)
+	defer cfg.cleanup()
+
+	cfg.begin(title)
+
+	ck := cfg.makeClient(cfg.All())
+
+	done_partitioner := int32(0)
+	done_clients := int32(0)
+	ch_partitioner := make(chan bool)
+	clnts := make([]chan int, nclients)
+	for i := 0; i < nclients; i++ {
+		clnts[i] = make(chan int)
+	}
+	for i := 0; i < 3; i++ {
+		// log.Printf("Iteration %v\n", i)
+		atomic.StoreInt32(&done_clients, 0)
+		atomic.StoreInt32(&done_partitioner, 0)
+		go spawn_clients_and_wait(t, cfg, nclients, func(cli int, myck *Clerk, t *testing.T) {
+			j := 0
+			defer func() {
+				clnts[cli] <- j
+			}()
+			last := ""
+			key := strconv.Itoa(cli)
+			Put(cfg, myck, key, last)
+			for atomic.LoadInt32(&done_clients) == 0 {
+				if (rand.Int() % 1000) < 500 {
+					nv := "x " + strconv.Itoa(cli) + " " + strconv.Itoa(j) + " y"
+					// log.Printf("%d: client new append %v\n", cli, nv)
+					Append(cfg, myck, key, nv)
+					last = NextValue(last, nv)
+					j++
+				} else {
+					// log.Printf("%d: client new get %v\n", cli, key)
+					v := Get(cfg, myck, key)
+					if v != last {
+						log.Fatalf("get wrong value, key %v, wanted:\n%v\n, got\n%v\n", key, last, v)
+					}
+				}
+			}
+		})
+
+		if partitions {
+			// Allow the clients to perform some operations without interruption
+			time.Sleep(1 * time.Second)
+			go partitioner(t, cfg, ch_partitioner, &done_partitioner)
+		}
+		time.Sleep(1 * time.Second)
+
+		atomic.StoreInt32(&done_clients, 1)     // tell clients to quit
+		atomic.StoreInt32(&done_partitioner, 1) // tell partitioner to quit
+
+		if partitions {
+			// log.Printf("wait for partitioner\n")
+			<-ch_partitioner
+			// reconnect network and submit a request. A client may
+			// have submitted a request in a minority.  That request
+			// won't return until that server discovers a new term
+			// has started.
+			cfg.ConnectAll()
+			// wait for a while so that we have a new term
+			time.Sleep(electionTimeout)
+		}
+
+		if crash {
+			// log.Printf("shutdown servers\n")
+			for i := 0; i < nservers; i++ {
+				cfg.ShutdownServer(i)
+			}
+			// Wait for a while for servers to shutdown, since
+			// shutdown isn't a real crash and isn't instantaneous
+			time.Sleep(electionTimeout)
+			// log.Printf("restart servers\n")
+			// crash and re-start all
+			for i := 0; i < nservers; i++ {
+				cfg.StartServer(i)
+			}
+			cfg.ConnectAll()
+		}
+
+		// log.Printf("wait for clients\n")
+		for i := 0; i < nclients; i++ {
+			// log.Printf("read from clients %d\n", i)
+			j := <-clnts[i]
+			// if j < 10 {
+			// 	log.Printf("Warning: client %d managed to perform only %d put operations in 1 sec?\n", i, j)
+			// }
+			key := strconv.Itoa(i)
+			// log.Printf("Check %v for client %d\n", j, i)
+			v := Get(cfg, ck, key)
+			checkClntAppends(t, i, v, j)
+		}
+
+		if maxraftstate > 0 {
+			// Check maximum after the servers have processed all client
+			// requests and had time to checkpoint.
+			sz := cfg.LogSize()
+			if sz > 8*maxraftstate {
+				t.Fatalf("logs were not trimmed (%v > 8*%v)", sz, maxraftstate)
+			}
+		}
+		if maxraftstate < 0 {
+			// Check that snapshots are not used
+			ssz := cfg.SnapshotSize()
+			if ssz > 0 {
+				t.Fatalf("snapshot too large (%v), should not be used when maxraftstate = %d", ssz, maxraftstate)
+			}
+		}
+	}
+
+	cfg.end()
+}
+
 func TestSnapshotRecoverManyClients3B(t *testing.T) {
 	// Test: restarts, snapshots, many clients (3B) ...
 	GenericTest(t, "3B", 20, false, true, false, 1000)
