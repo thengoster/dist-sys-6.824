@@ -498,6 +498,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// in the event we receive an AppendEntries from a leader that hasn't updated nextIndex yet from a previous AppendEntries,
 	// use our raft property of log matching to shift prevLogIndex if PrevLogIndex < lastIncludedIndex
+	// (IMPORTANT) as well as adjusting which entries we care about using i
 	prevLogIndex := args.PrevLogIndex
 	i := 0
 	if args.PrevLogIndex < rf.lastIncludedIndex {

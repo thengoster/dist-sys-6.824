@@ -15,7 +15,8 @@ type Clerk struct {
 	servers []*labrpc.ClientEnd
 	// You will have to modify this struct.
 
-	// unique identifier for this client as well as monotonically increasing sequence number for each request
+	// unique identifier for this client as well as monotonically increasing sequence number for each request,
+	// to allow our key-value service to detect duplicate requests
 	clientId      int64
 	seqNum        int
 	currentLeader int // cache the current kv server leader
@@ -54,7 +55,7 @@ func (ck *Clerk) Get(key string) string {
 
 	// You will have to modify this function.
 	ck.seqNum++
-	args := GetArgs{Key: key, ClientId: ck.clientId, SeqNum: ck.seqNum}
+	args := GetArgs{Key: key, Op: OpTypeGet, ClientId: ck.clientId, SeqNum: ck.seqNum}
 
 	for {
 		reply := GetReply{}

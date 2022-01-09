@@ -25,9 +25,9 @@ type Op struct {
 	// Your definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.
-	OpType   string
 	Key      string
 	Value    string // empty string for Get
+	OpType   string
 	ClientId int64
 	SeqNum   int
 }
@@ -87,45 +87,16 @@ func (kv *KVServer) waitTableEmit(index int, op Op) {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
-	kv.mu.Lock()
-	DPrintf("%d Get: %+v\n", kv.me, args)
+	ch := kv.operationHelper(reply, Op{Key: args.Key, Value: "", OpType: OpTypeGet, ClientId: args.ClientId, SeqNum: args.SeqNum})
 
-	if clientOp, ok := kv.dupeTable[args.ClientId]; ok {
-		// check if the request has already been executed
-		if clientOp.SeqNum == args.SeqNum {
-			reply.Err = OK
-			reply.Value = clientOp.Value
-			kv.mu.Unlock()
-			return
-		}
-	}
-
-	op := Op{
-		OpType:   OpTypeGet,
-		Key:      args.Key,
-		Value:    "",
-		ClientId: args.ClientId,
-		SeqNum:   args.SeqNum,
-	}
-
-	index, _, isLeader := kv.rf.Start(op)
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		kv.mu.Unlock()
+	if ch == nil {
 		return
 	}
 
-	// add to waitTable
-	ch := make(chan Op)
-	kv.waitTableAdd(index, ch)
+	response := kv.waitForResponse(ch, OpTypeGet) // response will have the value, if any
 
-	kv.mu.Unlock()
-
-	response := kv.waitForResponse(ch, op.OpType) // response will have the value, if any
-
-	if response.OpType == op.OpType && response.Key == op.Key &&
-		response.ClientId == op.ClientId && response.SeqNum == op.SeqNum {
+	if response.OpType == OpTypeGet && response.Key == args.Key &&
+		response.ClientId == args.ClientId && response.SeqNum == args.SeqNum {
 		// search for the key in the kvStore
 		if response.Value != "" {
 			reply.Err = OK
@@ -139,33 +110,50 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
-	kv.mu.Lock()
-	DPrintf("%d PutAppend: %+v\n", kv.me, args)
+	ch := kv.operationHelper(reply, Op{Key: args.Key, Value: args.Value, OpType: args.Op, ClientId: args.ClientId, SeqNum: args.SeqNum})
 
-	if clientOp, ok := kv.dupeTable[args.ClientId]; ok {
-		// check if the request has already been executed
-		if clientOp.SeqNum == args.SeqNum {
-			reply.Err = OK
-			kv.mu.Unlock()
-			return
-		}
+	if ch == nil {
+		return
 	}
 
-	op := Op{
-		OpType:   args.Op,
-		Key:      args.Key,
-		Value:    args.Value,
-		ClientId: args.ClientId,
-		SeqNum:   args.SeqNum,
+	response := kv.waitForResponse(ch, args.Op)
+
+	if response.OpType == args.Op && response.Key == args.Key && response.Value == args.Value &&
+		response.ClientId == args.ClientId && response.SeqNum == args.SeqNum {
+		reply.Err = OK
+	} else {
+		reply.Err = ErrWrongLeader
+	}
+}
+
+func (kv *KVServer) operationHelper(reply interface{}, op Op) chan Op {
+	kv.mu.Lock()
+
+	if clientOp, ok := kv.dupeTable[op.ClientId]; ok {
+		// check if the request has already been executed
+		if clientOp.SeqNum == op.SeqNum {
+			if _, ok := reply.(*GetReply); ok {
+				reply.(*GetReply).Err = OK
+				reply.(*GetReply).Value = clientOp.Value
+			} else {
+				reply.(*PutAppendReply).Err = OK
+			}
+
+			kv.mu.Unlock()
+			return nil
+		}
 	}
 
 	index, _, isLeader := kv.rf.Start(op)
 
 	if !isLeader {
-		reply.Err = ErrWrongLeader
+		if _, ok := reply.(*GetReply); ok {
+			reply.(*GetReply).Err = ErrWrongLeader
+		} else {
+			reply.(*PutAppendReply).Err = ErrWrongLeader
+		}
 		kv.mu.Unlock()
-		return
+		return nil
 	}
 
 	// add to waitTable
@@ -173,15 +161,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.waitTableAdd(index, ch)
 
 	kv.mu.Unlock()
-
-	response := kv.waitForResponse(ch, op.OpType)
-
-	if response.OpType == op.OpType && response.Key == op.Key && response.Value == op.Value &&
-		response.ClientId == op.ClientId && response.SeqNum == op.SeqNum {
-		reply.Err = OK
-	} else {
-		reply.Err = ErrWrongLeader
-	}
+	return ch
 }
 
 func (kv *KVServer) waitForResponse(ch chan Op, opType string) Op {
@@ -237,11 +217,9 @@ func (kv *KVServer) apply() {
 			kv.waitTableRemove(applyMsg.CommandIndex)
 
 			// take a snapshot if the log is too big
-			// if kv.maxraftstate != -1 && kv.rf.GetRaftStateSize()/float64(kv.maxraftstate) > 0.8 {
 			if kv.maxraftstate != -1 &&
-				kv.lastIncludedIndex < applyMsg.CommandIndex {
-				// kv.lastIncludedIndex < applyMsg.CommandIndex &&
-				// kv.rf.GetRaftStateSize()/float64(kv.maxraftstate) > 0.8 {
+				kv.lastIncludedIndex < applyMsg.CommandIndex &&
+				kv.rf.GetRaftStateSize()/float64(kv.maxraftstate) > 0.8 {
 				// DPrintf("%d kv apply: snapshotting\n", kv.me)
 				kv.lastIncludedIndex = applyMsg.CommandIndex
 				kv.lastIncludedTerm = applyMsg.CommandTerm
