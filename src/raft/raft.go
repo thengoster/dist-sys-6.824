@@ -817,18 +817,6 @@ func (rf *Raft) apply(applyCh chan ApplyMsg) {
 		// however, rf.mu is locked here due to applyCh blocking
 		// applyCh continues to block because kvserver already has a lock on its own apply method, thus rf.mu never releases lock here
 		applyCh <- applyMsg
-
-		// rf.mu.Lock()
-		// if applyMsg.CommandValid {
-		// 	rf.lastApplied++ // TODO: is this safe? what if a snapshot updates this?
-		// 	// DOESN"T MATTER IT STILL DIDNT WORK
-		// }
-		// rf.mu.Unlock()
-
-		// TODO: should i try applying in batches? example: commitIndex >> lastApplied (due to a crash perhaps), but clients continue to send requests
-		// the log approaches the max size threshold over and over, continually snapshotting and applying
-		// perhaps it will self correct...? no it won't, because still up to date, but behind on applying
-		// no time to self correct if client continues to bombard us with requests
 	}
 }
 

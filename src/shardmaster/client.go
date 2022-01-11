@@ -43,6 +43,7 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 }
 
 func (ck *Clerk) Join(servers map[int][]string) {
+	ck.seqNum++
 	args := JoinArgs{}
 
 	args.Servers = servers
@@ -64,6 +65,7 @@ func (ck *Clerk) Join(servers map[int][]string) {
 }
 
 func (ck *Clerk) Leave(gids []int) {
+	ck.seqNum++
 	args := LeaveArgs{}
 
 	args.GIDs = gids

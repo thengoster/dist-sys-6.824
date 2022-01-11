@@ -711,11 +711,6 @@ func TestSnapshotRecover3B(t *testing.T) {
 	GenericTest(t, "3B", 1, false, true, false, 1000)
 }
 
-func TestDAMO3B(t *testing.T) {
-	// Test: restarts, snapshots, many clients (3B) ...
-	GenericTestDAMO(t, "3B", 20, false, true, false, 1000)
-}
-
 // Basic test is as follows: one or more clients submitting Append/Get
 // operations to set of servers for some period of time.  After the period is
 // over, test checks that all appended values are present and in order for a

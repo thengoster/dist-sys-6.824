@@ -30,6 +30,11 @@ type Config struct {
 
 const (
 	OK = "OK"
+
+	OpTypeJoin  = "Join"
+	OpTypeLeave = "Leave"
+	OpTypeMove  = "Move"
+	OpTypeQuery = "Query"
 )
 
 type Err string

@@ -87,7 +87,7 @@ func (kv *KVServer) waitTableEmit(index int, op Op) {
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	ch := kv.operationHelper(reply, Op{Key: args.Key, Value: "", OpType: OpTypeGet, ClientId: args.ClientId, SeqNum: args.SeqNum})
+	ch := kv.operationHelper(reply, Op{Key: args.Key, OpType: OpTypeGet, ClientId: args.ClientId, SeqNum: args.SeqNum})
 
 	if ch == nil {
 		return
@@ -170,7 +170,7 @@ func (kv *KVServer) waitForResponse(ch chan Op, opType string) Op {
 	for {
 		select {
 		case response := <-ch:
-			DPrintf("%d %s: response received\n", kv.me, opType)
+			DPrintf("%d %s: response received: %+v\n", kv.me, opType, response)
 			return response
 		case <-time.After(raft.ElectionTimeoutMin * time.Millisecond):
 			// are we still the leader?
@@ -239,9 +239,9 @@ func (kv *KVServer) applyOp(op *Op) {
 	switch op.OpType {
 	case OpTypeGet:
 		if value, ok := kv.kvStore[op.Key]; ok {
+			op.Value = value
 			// update the duplicate table to mark as executed
 			kv.dupeTable[op.ClientId] = dupeOp{SeqNum: op.SeqNum, Value: value}
-			op.Value = value
 		}
 	case OpTypePut:
 		kv.kvStore[op.Key] = op.Value
