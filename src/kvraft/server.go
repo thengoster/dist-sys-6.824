@@ -217,6 +217,8 @@ func (kv *KVServer) apply() {
 			kv.waitTableRemove(applyMsg.CommandIndex)
 
 			// take a snapshot if the log is too big
+			// TODO: in the working lab 3 commit, we took a snapshot every time a new entry was added to the log
+			// however, when only taking a snapshot when the log was too big, a bug was introduced. Debug after adding log improvements
 			if kv.maxraftstate != -1 &&
 				kv.lastIncludedIndex < applyMsg.CommandIndex &&
 				kv.rf.GetRaftStateSize()/float64(kv.maxraftstate) > 0.8 {

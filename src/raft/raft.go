@@ -91,7 +91,7 @@ type Raft struct {
 	leaderId                 int
 
 	applyCond          *sync.Cond // condition variable to signal raft to apply log or snapshot to state machine
-	InstallNewSnapshot bool
+	installNewSnapshot bool
 
 	// Persistent state on all servers
 	log         []LogEntry
@@ -598,7 +598,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		rf.lastApplied = args.LastIncludedIndex
 	}
 
-	rf.InstallNewSnapshot = true
+	rf.installNewSnapshot = true
 	rf.applyCond.Broadcast()
 }
 
@@ -789,16 +789,16 @@ func (rf *Raft) apply(applyCh chan ApplyMsg) {
 		}
 		rf.mu.Lock()
 		// wait for commitIndex to change
-		for !rf.InstallNewSnapshot && rf.commitIndex == rf.lastApplied {
+		for !rf.installNewSnapshot && rf.commitIndex == rf.lastApplied {
 			rf.applyCond.Wait()
 		}
-		DPrintf("%d: apply InstallNewSnapshot: %t, commitIndex: %d, lastApplied: %d, log: %+v\n", rf.me, rf.InstallNewSnapshot, rf.commitIndex, rf.lastApplied, rf.log)
+		DPrintf("%d: apply installNewSnapshot: %t, commitIndex: %d, lastApplied: %d, log: %+v\n", rf.me, rf.installNewSnapshot, rf.commitIndex, rf.lastApplied, rf.log)
 
 		var applyMsg ApplyMsg
 
 		// either we have a new snapshot (prioritize it) or we have a new committed log
-		if rf.InstallNewSnapshot {
-			rf.InstallNewSnapshot = false
+		if rf.installNewSnapshot {
+			rf.installNewSnapshot = false
 			applyMsg = ApplyMsg{
 				CommandValid: false,
 				Snapshot:     rf.persister.ReadSnapshot(),
