@@ -2,7 +2,6 @@ package kvraft
 
 import (
 	"bytes"
-	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -10,16 +9,8 @@ import (
 	"../labgob"
 	"../labrpc"
 	"../raft"
+	"../util"
 )
-
-const Debug = 0
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 type Op struct {
 	// Your definitions here.
@@ -128,6 +119,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *KVServer) operationHelper(reply interface{}, op Op) chan Op {
 	kv.mu.Lock()
+	util.Debug(util.DTrace, "S%d operationHelper: %v", kv.me, op)
 
 	if clientOp, ok := kv.dupeTable[op.ClientId]; ok {
 		// check if the request has already been executed
@@ -166,16 +158,15 @@ func (kv *KVServer) operationHelper(reply interface{}, op Op) chan Op {
 
 func (kv *KVServer) waitForResponse(ch chan Op, opType string) Op {
 	// wait for the response
-	// DPrintf("%d %s: waiting for response\n", kv.me, opType)
 	for {
 		select {
 		case response := <-ch:
-			DPrintf("%d %s: response received: %+v\n", kv.me, opType, response)
+			util.Debug(util.DTrace, "S%d %s response received: %+v", kv.me, opType, response)
 			return response
 		case <-time.After(raft.ElectionTimeoutMin * time.Millisecond):
 			// are we still the leader?
 			if _, isLeader := kv.rf.GetState(); !isLeader {
-				// DPrintf("%d %s: timed out\n", kv.me, opType)
+				util.Debug(util.DTrace, "S%d %s timed out\n", kv.me, opType)
 				return Op{}
 			}
 		}
@@ -196,7 +187,7 @@ func (kv *KVServer) apply() {
 		if applyMsg.CommandValid {
 
 			op := applyMsg.Command.(Op)
-			DPrintf("%d kv apply: %+v\n", kv.me, applyMsg)
+			util.Debug(util.DTrace, "S%d kv apply: %+v", kv.me, applyMsg)
 			// do not re-execute if the operation is a duplicate
 			clientOp, ok := kv.dupeTable[op.ClientId]
 
@@ -217,19 +208,17 @@ func (kv *KVServer) apply() {
 			kv.waitTableRemove(applyMsg.CommandIndex)
 
 			// take a snapshot if the log is too big
-			// TODO: in the working lab 3 commit, we took a snapshot every time a new entry was added to the log
-			// however, when only taking a snapshot when the log was too big, a bug was introduced. Debug after adding log improvements
 			if kv.maxraftstate != -1 &&
 				kv.lastIncludedIndex < applyMsg.CommandIndex &&
 				kv.rf.GetRaftStateSize()/float64(kv.maxraftstate) > 0.8 {
-				// DPrintf("%d kv apply: snapshotting\n", kv.me)
+				util.Debug(util.DSnap, "S%d kv apply: snapshotting\n", kv.me)
 				kv.lastIncludedIndex = applyMsg.CommandIndex
 				kv.lastIncludedTerm = applyMsg.CommandTerm
 				snapshot := kv.encodeSnapshot()
 				kv.rf.PersistStateAndSnapshotWithLock(snapshot, applyMsg.CommandIndex, applyMsg.CommandTerm)
 			}
 		} else {
-			DPrintf("%d kv apply: snapshot received\n", kv.me)
+			util.Debug(util.DTrace, "S%d kv apply: snapshot received", kv.me)
 			kv.readPersistedSnapshot(applyMsg.Snapshot)
 		}
 
@@ -249,9 +238,8 @@ func (kv *KVServer) applyOp(op *Op) {
 		kv.kvStore[op.Key] = op.Value
 		kv.dupeTable[op.ClientId] = dupeOp{SeqNum: op.SeqNum}
 	case OpTypeAppend:
-		// DPrintf("%d kv append before: key: %s, value: %s\n", kv.me, op.Key, kv.kvStore[op.Key])
 		kv.kvStore[op.Key] += op.Value
-		DPrintf("%d kv append after: key: %s, value: %s\n", kv.me, op.Key, kv.kvStore[op.Key])
+		util.Debug(util.DTrace, "S%d kv append after: key: %s, value: %s", kv.me, op.Key, kv.kvStore[op.Key])
 		kv.dupeTable[op.ClientId] = dupeOp{SeqNum: op.SeqNum}
 	}
 }
@@ -301,7 +289,7 @@ func (kv *KVServer) readPersistedSnapshot(snapshot []byte) {
 		d.Decode(&dupeTable) != nil ||
 		d.Decode(&lastIncludedIndex) != nil ||
 		d.Decode(&lastIncludedTerm) != nil {
-		DPrintf("%d: readPersistedSnapshot() failed\n", kv.me)
+		util.Debug(util.DError, "S%d readPersistedSnapshot() failed", kv.me)
 		kv.kvStore = make(map[string]string)
 		kv.dupeTable = make(map[int64]dupeOp)
 		kv.lastIncludedIndex = 0
@@ -341,7 +329,7 @@ func (kv *KVServer) encodeSnapshot() []byte {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	DPrintf("%d: starting kv server\n", me)
+	util.Debug(util.DTrace, "S%d starting kv server", me)
 
 	labgob.Register(Op{})
 

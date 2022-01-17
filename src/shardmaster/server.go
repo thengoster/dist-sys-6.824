@@ -1,28 +1,17 @@
 package shardmaster
 
 import (
-	"log"
 	"math"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	// "time"
-
 	"../labgob"
 	"../labrpc"
 	"../raft"
+	"../util"
 )
-
-const Debug = 0
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 type ShardMaster struct {
 	mu      sync.Mutex
@@ -155,7 +144,7 @@ func (sm *ShardMaster) Query(args *QueryArgs, reply *QueryReply) {
 
 func (sm *ShardMaster) operationHelper(reply interface{}, op Op) chan Op {
 	sm.mu.Lock()
-	DPrintf("[%d] operationHelper: %v", sm.me, op)
+	util.Debug(util.DTrace, "SM%d operationHelper: %v", sm.me, op)
 
 	if clientOp, ok := sm.dupeTable[op.ClientId]; ok {
 		// check if the request has already been executed
@@ -204,16 +193,15 @@ func (sm *ShardMaster) operationHelper(reply interface{}, op Op) chan Op {
 
 func (sm *ShardMaster) waitForResponse(ch chan Op, opType string) Op {
 	// wait for the response
-	// DPrintf("%d %s: waiting for response\n", sm.me, opType)
 	for {
 		select {
 		case response := <-ch:
-			// DPrintf("%d %s: response received: %+v\n", sm.me, opType, response)
+			util.Debug(util.DTrace, "SM%d %s response received: %+v", sm.me, opType, response)
 			return response
 		case <-time.After(raft.ElectionTimeoutMin * time.Millisecond):
 			// are we still the leader?
 			if _, isLeader := sm.rf.GetState(); !isLeader {
-				// DPrintf("%d %s: timed out\n", sm.me, opType)
+				util.Debug(util.DTrace, "SM%d %s timed out\n", sm.me, opType)
 				return Op{}
 			}
 		}
@@ -234,7 +222,7 @@ func (sm *ShardMaster) apply() {
 		if applyMsg.CommandValid {
 
 			op := applyMsg.Command.(Op)
-			DPrintf("%d sm apply: %+v\n", sm.me, applyMsg)
+			util.Debug(util.DTrace, "SM%d kv apply: %+v", sm.me, applyMsg)
 			// do not re-execute if the operation is a duplicate
 			clientOp, ok := sm.dupeTable[op.ClientId]
 
@@ -324,7 +312,7 @@ func (sm *ShardMaster) applyOp(op *Op) {
 		sm.dupeTable[op.ClientId] = dupeOp{SeqNum: op.SeqNum, Conf: op.Conf}
 	}
 
-	DPrintf("%d sm applyOp: %+v\n", sm.me, sm.configs)
+	util.Debug(util.DTrace, "SM%d applyOp: %+v", sm.me, sm.configs)
 }
 
 func (sm *ShardMaster) rebalanceShards(shards *[NShards]int, groups map[int][]string) {
@@ -379,7 +367,7 @@ func (sm *ShardMaster) rebalanceShards(shards *[NShards]int, groups map[int][]st
 		}
 	}
 
-	DPrintf("%d rebalanceShards, shards: %+v, groups: %+v\n", sm.me, shards, groups)
+	util.Debug(util.DTrace, "SM%d rebalanceShards, shards: %+v, groups: %+v", sm.me, shards, groups)
 }
 
 //

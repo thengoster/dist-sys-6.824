@@ -15,6 +15,7 @@ import (
 
 	"../labrpc"
 	"../shardmaster"
+	"../util"
 )
 
 //
@@ -83,6 +84,8 @@ func (ck *Clerk) Get(key string) string {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		args.Shard = shard
+		util.Debug(util.DClient, "C%d Get", ck.clientId)
+
 		if servers, ok := ck.config.Groups[gid]; ok {
 			// try each server for the shard.
 			for si := 0; si < len(servers); si++ {
@@ -90,9 +93,11 @@ func (ck *Clerk) Get(key string) string {
 				var reply GetReply
 				ok := srv.Call("ShardKV.Get", &args, &reply)
 				if ok && (reply.Err == OK || reply.Err == ErrNoKey) {
+					util.Debug(util.DClient, "C%d Get args/reply, args: %+v\nreply: %+v", ck.clientId, args, reply)
 					return reply.Value
 				}
 				if ok && (reply.Err == ErrWrongGroup) {
+					util.Debug(util.DClient, "C%d Get was to wrong group", ck.clientId)
 					break
 				}
 				// ... not ok, or ErrWrongLeader
@@ -118,15 +123,19 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		shard := key2shard(key)
 		gid := ck.config.Shards[shard]
 		args.Shard = shard
+		util.Debug(util.DClient, "C%d PutAppend, value: %v", ck.clientId, value)
+
 		if servers, ok := ck.config.Groups[gid]; ok {
 			for si := 0; si < len(servers); si++ {
 				srv := ck.make_end(servers[si])
 				var reply PutAppendReply
 				ok := srv.Call("ShardKV.PutAppend", &args, &reply)
 				if ok && reply.Err == OK {
+					util.Debug(util.DClient, "C%d PutAppend args/reply, args: %+v\nreply: %+v", ck.clientId, args, reply)
 					return
 				}
 				if ok && reply.Err == ErrWrongGroup {
+					util.Debug(util.DClient, "C%d PutAppend was to wrong group", ck.clientId)
 					break
 				}
 				// ... not ok, or ErrWrongLeader

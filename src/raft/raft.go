@@ -23,11 +23,12 @@ import (
 
 	"bytes"
 
-	"../labgob"
-	"../labrpc"
-
 	"math/rand"
 	"time"
+
+	"../labgob"
+	"../labrpc"
+	"../util"
 )
 
 //
@@ -117,7 +118,7 @@ type Raft struct {
 // raft functions that help with code organization and explicitness //
 //////////////////////////////////////////////////////////////////////
 func (rf *Raft) convertToFollower() {
-	DPrintf("%d: convertToFollower()\n", rf.me)
+	util.Debug(util.DInfo, "S%d Converting to follower", rf.me)
 	oldRole := rf.role
 
 	rf.role = Follower
@@ -130,13 +131,13 @@ func (rf *Raft) convertToFollower() {
 }
 
 func (rf *Raft) convertToCandidate() {
-	DPrintf("%d: convertToCandidate()\n", rf.me)
+	util.Debug(util.DInfo, "S%d Converting to candidate", rf.me)
 	rf.role = Candidate
 	rf.resetElectionTimeout()
 }
 
 func (rf *Raft) convertToLeader() {
-	DPrintf("%d: convertToLeader()\n", rf.me)
+	util.Debug(util.DInfo, "S%d Converting to leader", rf.me)
 	rf.role = Leader
 	rf.nextIndex = make([]int, len(rf.peers))
 	rf.matchIndex = make([]int, len(rf.peers))
@@ -151,7 +152,7 @@ func (rf *Raft) convertToLeader() {
 }
 
 func (rf *Raft) updateTerm(term int) {
-	DPrintf("%d: updateTerm(%d)\n", rf.me, term)
+	util.Debug(util.DTerm, "S%d Updating term to %d", rf.me, term)
 	rf.currentTerm = term
 	rf.votedFor = -1
 	rf.persistState()
@@ -175,7 +176,7 @@ func (rf *Raft) getLastLogTerm() int {
 func (rf *Raft) getLogEntry(index int) LogEntry {
 	logEntry := rf.log[index-rf.lastIncludedIndex]
 	if logEntry.Index != index {
-		DPrintf("%d: getLogEntry: log entry index does not match index, logIndex: %d, index: %d\n", rf.me, logEntry.Index, index)
+		util.Debug(util.DError, "S%d getLogEntry: log entry index does not match index, logIndex: %d, index: %d", rf.me, logEntry.Index, index)
 		panic("getLogEntry: log entry index does not match index")
 	}
 	return logEntry
@@ -204,7 +205,7 @@ func (rf *Raft) persistState() {
 	// Your code here (2C).
 	state := rf.encodeState()
 	rf.persister.SaveRaftState(state)
-	// DPrintf("%d: persistState() completed\n", rf.me)
+	util.Debug(util.DPersist, "S%d persistState() completed", rf.me)
 }
 
 func (rf *Raft) encodeState() []byte {
@@ -238,7 +239,7 @@ func (rf *Raft) readPersistedState(data []byte) {
 	if d.Decode(&log) != nil ||
 		d.Decode(&currentTerm) != nil ||
 		d.Decode(&votedFor) != nil {
-		DPrintf("%d: readPersistedState() failed\n", rf.me)
+		util.Debug(util.DError, "S%d readPersistedState() failed", rf.me)
 		rf.log = []LogEntry{{0, 0, nil}}
 		rf.currentTerm = 0
 		rf.votedFor = -1
@@ -277,7 +278,7 @@ func (rf *Raft) readPersistedSnapshot(snapshot []byte) {
 		d.Decode(&dupeTable) != nil ||
 		d.Decode(&lastIncludedIndex) != nil ||
 		d.Decode(&lastIncludedTerm) != nil {
-		DPrintf("%d: readPersistedSnapshot() failed\n", rf.me)
+		util.Debug(util.DError, "S%d readPersistedSnapshot() failed", rf.me)
 		rf.lastIncludedIndex = 0
 		rf.lastIncludedTerm = 0
 	} else {
@@ -285,40 +286,41 @@ func (rf *Raft) readPersistedSnapshot(snapshot []byte) {
 		rf.lastIncludedTerm = lastIncludedTerm
 	}
 
-	DPrintf("%d: readPersistedSnapshot() completed, index: %d, term: %d\n", rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm)
+	util.Debug(util.DPersist, "S%d readPersistedSnapshot() completed, index: %d, term: %d", rf.me, rf.lastIncludedIndex, rf.lastIncludedTerm)
 }
 
 func (rf *Raft) GetRaftStateSize() float64 {
 	return float64(rf.persister.RaftStateSize())
 }
 
-func (rf *Raft) PersistStateAndSnapshotWithLock(snapshot []byte, index int, term int) {
+func (rf *Raft) PersistStateAndSnapshotWithLock(snapshot []byte, index int, term int) bool {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	rf.persistStateAndSnapshot(snapshot, index, term)
+	return rf.persistStateAndSnapshot(snapshot, index, term)
 }
 
-func (rf *Raft) persistStateAndSnapshot(snapshot []byte, index int, term int) {
+func (rf *Raft) persistStateAndSnapshot(snapshot []byte, index int, term int) bool {
 	// return immediately if the argument snapshot is stale
-	if index <= rf.lastIncludedIndex {
-		return
+	if index < rf.commitIndex {
+		util.Debug(util.DSnap, "S%d persistStateAndSnapshot() snapshot arg is stale. index: %d, commitIndex: %d", rf.me, index, rf.commitIndex)
+		return false
 	}
 
 	rf.lastIncludedIndex = index
 	rf.lastIncludedTerm = term
 
 	state := rf.encodeState()
-
 	rf.persister.SaveStateAndSnapshot(state, snapshot)
-
 	rf.trimLog()
 
-	DPrintf("%d: persistStateAndSnapshot() completed index: %d, term: %d, log: %+v\n", rf.me, index, term, rf.log)
+	util.Debug(util.DSnap, "S%d persistStateAndSnapshot() completed index: %d, term: %d, log: %+v", rf.me, index, term, rf.log)
+
+	return true
 }
 
 func (rf *Raft) trimLog() {
-	// DPrintf("%d: TrimLog() Before %+v\n", rf.me, rf.log)
+	util.Debug(util.DTrace, "S%d trimLog() Before %+v", rf.me, rf.log)
 	foundLastSnapshotEntry := false
 
 	// discard log entries that are a part of the snapshot
@@ -339,7 +341,7 @@ func (rf *Raft) trimLog() {
 		// no match, discard everything
 		rf.log = []LogEntry{{rf.lastIncludedIndex, rf.lastIncludedTerm, nil}}
 	}
-	// DPrintf("%d: TrimLog() After %+v\n", rf.me, rf.log)
+	util.Debug(util.DTrace, "S%d trimLog() After %+v", rf.me, rf.log)
 	rf.persistState()
 }
 
@@ -376,7 +378,7 @@ type AppendEntriesReply struct {
 
 	/**
 	 * in the case of failure, we can speed up AE rollback by providing ConflictTerm, ConflictIndex and LogLength
-	 * on success, these are ignored (supply anyway for debugging)
+	 * on success, these are ignored (supply anyway for util.Debugging)
 	 * ConflictTerm: term in the conflicting entry at PrevLogIndex (-1 if there is no entry)
 	 * ConflictIndex: index of the first entry for ConflictTerm (-1 if there is no entry)
 	 * LogLength: follower's last log index
@@ -413,7 +415,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("%d: RequestVote()\n", rf.me)
+	util.Debug(util.DInfo, "S%d RequestVote()", rf.me)
 	if args.Term > rf.currentTerm {
 		rf.updateTerm(args.Term)
 		rf.convertToFollower()
@@ -474,7 +476,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("%d: AppendEntries: args:%+v\nlog:%+v\n", rf.me, args, rf.log)
+	util.Debug(util.DInfo, "S%d AppendEntries: args:%+v\nlog:%+v", rf.me, args, rf.log)
 
 	if args.Term > rf.currentTerm {
 		rf.updateTerm(args.Term)
@@ -571,7 +573,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("%d: InstallSnapshot\n", rf.me)
+	util.Debug(util.DSnap, "S%d InstallSnapshot", rf.me)
 	if args.Term > rf.currentTerm {
 		rf.updateTerm(args.Term)
 		rf.convertToFollower()
@@ -589,17 +591,15 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 	}
 	rf.leaderId = args.LeaderId
 
-	rf.persistStateAndSnapshot(args.Data, args.LastIncludedIndex, args.LastIncludedTerm)
+	snapshotPersisted := rf.persistStateAndSnapshot(args.Data, args.LastIncludedIndex, args.LastIncludedTerm)
 
-	if args.LastIncludedIndex > rf.commitIndex {
+	if snapshotPersisted {
 		rf.commitIndex = args.LastIncludedIndex
 		rf.lastApplied = args.LastIncludedIndex
-	} else if args.LastIncludedIndex > rf.lastApplied {
-		rf.lastApplied = args.LastIncludedIndex
-	}
 
-	rf.installNewSnapshot = true
-	rf.applyCond.Broadcast()
+		rf.installNewSnapshot = true
+		rf.applyCond.Broadcast()
+	}
 }
 
 func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
@@ -630,7 +630,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	DPrintf("%d: Start: %+v\n", rf.me, command)
+	util.Debug(util.DTrace, "S%d Start(): command: %+v", rf.me, command)
 
 	if rf.role == Leader {
 		index = rf.getLastLogIndex() + 1
@@ -662,7 +662,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 //
 // the issue is that long-running goroutines use memory and may chew
 // up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
+// confusing util.Debug output. any goroutine with a long-running loop
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
@@ -694,7 +694,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	DPrintf("%d: Make()\n", rf.me)
+	util.Debug(util.DTrace, "S%d Make()", rf.me)
 	rf.applyCond = sync.NewCond(&rf.mu)
 
 	// start with persistent states
@@ -792,7 +792,7 @@ func (rf *Raft) apply(applyCh chan ApplyMsg) {
 		for !rf.installNewSnapshot && rf.commitIndex == rf.lastApplied {
 			rf.applyCond.Wait()
 		}
-		DPrintf("%d: apply installNewSnapshot: %t, commitIndex: %d, lastApplied: %d, log: %+v\n", rf.me, rf.installNewSnapshot, rf.commitIndex, rf.lastApplied, rf.log)
+		util.Debug(util.DCommit, "S%d Apply installNewSnapshot: %t, commitIndex: %d, lastApplied: %d, log: %+v", rf.me, rf.installNewSnapshot, rf.commitIndex, rf.lastApplied, rf.log)
 
 		var applyMsg ApplyMsg
 
@@ -826,7 +826,7 @@ func (rf *Raft) apply(applyCh chan ApplyMsg) {
 func (rf *Raft) startElection() {
 	rf.mu.Lock()
 
-	DPrintf("%d: startElection\n", rf.me)
+	util.Debug(util.DTrace, "S%d startElection()", rf.me)
 
 	rf.updateTerm(rf.currentTerm + 1)
 	rf.votedFor = rf.me
@@ -853,7 +853,7 @@ func (rf *Raft) startElection() {
 		rf.mu.Lock()
 		defer rf.mu.Unlock()
 
-		DPrintf("%d: sendAndHandleRequestVote(%d) reply: %+v\n", rf.me, server, reply)
+		util.Debug(util.DTrace, "S%d sendAndHandleRequestVote from S%d reply: %+v", rf.me, server, reply)
 
 		if reply.Term > rf.currentTerm {
 			rf.updateTerm(reply.Term)
@@ -890,7 +890,7 @@ func (rf *Raft) sendAndHandleAppendEntries(server int) {
 		return
 	}
 
-	// DPrintf("%d: sendAndHandleAppendEntries(%d) start, nextIndex: %+v\n", rf.me, server, rf.nextIndex)
+	util.Debug(util.DTrace, "S%d sendAndHandleAppendEntries(%d) start, nextIndex: %+v", rf.me, server, rf.nextIndex)
 
 	// if the follower has fallen too far behind, send them a screenshot
 	if rf.nextIndex[server] <= rf.lastIncludedIndex {
@@ -918,7 +918,7 @@ func (rf *Raft) sendAndHandleAppendEntries(server int) {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	// DPrintf("%d: sendAndHandleAppendEntries(%d) reply: %+v\n      entries: %+v\n", rf.me, server, reply, args.Entries)
+	util.Debug(util.DTrace, "S%d sendAndHandleAppendEntries from S%d reply: %+v\n      entries: %+v", rf.me, server, reply, args.Entries)
 
 	// immediately step down if the leader is found to be out of date
 	if reply.Term > rf.currentTerm {
@@ -989,7 +989,7 @@ func (rf *Raft) sendAndHandleAppendEntries(server int) {
 		}
 	}
 
-	// DPrintf("%d: sendAndHandleAppendEntries end(%d), nextIndex: %+v\n", rf.me, server, rf.nextIndex)
+	util.Debug(util.DTrace, "S%d sendAndHandleAppendEntries end(%d), nextIndex: %+v", rf.me, server, rf.nextIndex)
 }
 
 func (rf *Raft) sendAndHandleInstallSnapshot(server int) {
@@ -999,7 +999,7 @@ func (rf *Raft) sendAndHandleInstallSnapshot(server int) {
 		return
 	}
 
-	DPrintf("%d: sendAndHandleInstallSnapshot(%d) start, nextIndex: %+v\n", rf.me, server, rf.nextIndex)
+	util.Debug(util.DSnap, "S%d sendAndHandleInstallSnapshot(%d) start, nextIndex: %+v", rf.me, server, rf.nextIndex)
 
 	// rf.readPersistedSnapshot(rf.persister.ReadSnapshot())
 	args := InstallSnapshotArgs{
@@ -1041,7 +1041,7 @@ func (rf *Raft) sendAndHandleInstallSnapshot(server int) {
 		// rf.matchIndex[server] = rf.lastIncludedIndex <- not necessarily true...what if the snapshot failed?
 	}
 
-	DPrintf("%d: sendAndHandleInstallSnapshot(%d) end, nextIndex: %+v\n", rf.me, server, rf.nextIndex)
+	util.Debug(util.DSnap, "S%d sendAndHandleInstallSnapshot(%d) end, nextIndex: %+v", rf.me, server, rf.nextIndex)
 
 	// TODO: do I need to send here or just let heartbeat handle it?
 	// go rf.sendAndHandleAppendEntries(server)

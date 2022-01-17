@@ -2,7 +2,6 @@ package shardkv
 
 import (
 	"bytes"
-	"log"
 	"sync"
 	"time"
 
@@ -10,16 +9,8 @@ import (
 	"../labrpc"
 	"../raft"
 	"../shardmaster"
+	"../util"
 )
-
-const Debug = 1
-
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug > 0 {
-		log.Printf(format, a...)
-	}
-	return
-}
 
 type Op struct {
 	// Your definitions here.
@@ -148,8 +139,8 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 func (kv *ShardKV) operationHelper(reply interface{}, op Op) chan Op {
 	kv.mu.Lock()
+	util.Debug(util.DTrace, "S%d operationHelper: %v", kv.me, op)
 
-	DPrintf("%d %s: %+v\n", kv.me, op.OpType, op)
 	// check if we are in charge of this shard
 	if kv.config.Shards[op.Shard] != kv.gid {
 		if _, ok := reply.(*GetReply); ok {
@@ -198,16 +189,15 @@ func (kv *ShardKV) operationHelper(reply interface{}, op Op) chan Op {
 
 func (kv *ShardKV) waitForResponse(ch chan Op, opType string) Op {
 	// wait for the response
-	// DPrintf("%d %s: waiting for response\n", kv.me, opType)
 	for {
 		select {
 		case response := <-ch:
-			DPrintf("%d %s: response received: %+v\n", kv.me, opType, response)
+			util.Debug(util.DTrace, "S%d %s response received: %+v", kv.me, opType, response)
 			return response
 		case <-time.After(raft.ElectionTimeoutMin * time.Millisecond):
 			// are we still the leader?
 			if _, isLeader := kv.rf.GetState(); !isLeader {
-				// DPrintf("%d %s: timed out\n", kv.me, opType)
+				util.Debug(util.DTrace, "S%d %s timed out\n", kv.me, opType)
 				return Op{}
 			}
 		}
@@ -224,7 +214,7 @@ func (kv *ShardKV) apply() {
 		if applyMsg.CommandValid {
 
 			op := applyMsg.Command.(Op)
-			DPrintf("%d kv apply: %+v\n", kv.me, applyMsg)
+			util.Debug(util.DTrace, "S%d kv apply: %+v", kv.me, applyMsg)
 			// do not re-execute if the operation is a duplicate
 			clientOp, ok := kv.dupeTable[op.ClientId]
 
@@ -248,14 +238,14 @@ func (kv *ShardKV) apply() {
 			if kv.maxraftstate != -1 &&
 				kv.lastIncludedIndex < applyMsg.CommandIndex &&
 				kv.rf.GetRaftStateSize()/float64(kv.maxraftstate) > 0.8 {
-				// DPrintf("%d kv apply: snapshotting\n", kv.me)
+				util.Debug(util.DSnap, "S%d kv apply: snapshotting\n", kv.me)
 				kv.lastIncludedIndex = applyMsg.CommandIndex
 				kv.lastIncludedTerm = applyMsg.CommandTerm
 				snapshot := kv.encodeSnapshot()
 				kv.rf.PersistStateAndSnapshotWithLock(snapshot, applyMsg.CommandIndex, applyMsg.CommandTerm)
 			}
 		} else {
-			DPrintf("%d kv apply: snapshot received\n", kv.me)
+			util.Debug(util.DTrace, "S%d kv apply: snapshot received", kv.me)
 			kv.readPersistedSnapshot(applyMsg.Snapshot)
 		}
 
@@ -275,9 +265,8 @@ func (kv *ShardKV) applyOp(op *Op) {
 		kv.kvStore[op.Key] = op.Value
 		kv.dupeTable[op.ClientId] = dupeOp{SeqNum: op.SeqNum}
 	case OpTypeAppend:
-		// DPrintf("%d kv append before: key: %s, value: %s\n", kv.me, op.Key, kv.kvStore[op.Key])
 		kv.kvStore[op.Key] += op.Value
-		DPrintf("%d kv append after: key: %s, value: %s\n", kv.me, op.Key, kv.kvStore[op.Key])
+		util.Debug(util.DTrace, "S%d kv append after: key: %s, value: %s", kv.me, op.Key, kv.kvStore[op.Key])
 		kv.dupeTable[op.ClientId] = dupeOp{SeqNum: op.SeqNum}
 	}
 }
@@ -317,7 +306,7 @@ func (kv *ShardKV) readPersistedSnapshot(snapshot []byte) {
 		d.Decode(&dupeTable) != nil ||
 		d.Decode(&lastIncludedIndex) != nil ||
 		d.Decode(&lastIncludedTerm) != nil {
-		DPrintf("%d: readPersistedSnapshot() failed\n", kv.me)
+		util.Debug(util.DError, "S%d readPersistedSnapshot() failed", kv.me)
 		kv.kvStore = make(map[string]string)
 		kv.dupeTable = make(map[int64]dupeOp)
 		kv.lastIncludedIndex = 0
@@ -342,16 +331,16 @@ func (kv *ShardKV) encodeSnapshot() []byte {
 
 // TODO
 func (kv *ShardKV) pollConfigChange() {
-	// for {
-	// 	kv.mu.Lock()
-	// 	// ask master for the latest configuration.
-	// 	// currentConfig := kv.smClerk.Query(-1)
-	// 	kv.config = kv.smClerk.Query(-1)
+	for {
+		kv.mu.Lock()
+		// ask master for the latest configuration.
+		// currentConfig := kv.smClerk.Query(-1)
+		kv.config = kv.smClerk.Query(-1)
 
-	// 	// evaluate the shards that our GID is/is not handling
-	// 	kv.mu.Unlock()
-	// 	time.Sleep(100 * time.Millisecond)
-	// }
+		// evaluate the shards that our GID is/is not handling
+		kv.mu.Unlock()
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 //
@@ -385,7 +374,7 @@ func (kv *ShardKV) pollConfigChange() {
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int, gid int, masters []*labrpc.ClientEnd, make_end func(string) *labrpc.ClientEnd) *ShardKV {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	DPrintf("%d: starting kv server\n", me)
+	util.Debug(util.DTrace, "S%d starting kv server", me)
 
 	labgob.Register(Op{})
 

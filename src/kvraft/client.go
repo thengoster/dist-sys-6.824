@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"../labrpc"
+	"../util"
 )
 
 const ClientRetryInterval = time.Duration(100) * time.Millisecond
@@ -52,19 +53,17 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
-
-	// You will have to modify this function.
 	ck.seqNum++
 	args := GetArgs{Key: key, Op: OpTypeGet, ClientId: ck.clientId, SeqNum: ck.seqNum}
 
 	for {
 		reply := GetReply{}
-		// DPrintf("[Clerk](%d) Get to [%v]", ck.clientId, ck.currentLeader)
+		util.Debug(util.DClient, "C%d Get", ck.clientId)
 		ok := ck.servers[ck.currentLeader].Call("KVServer.Get", &args, &reply)
 
 		if ok {
 			if reply.Err == OK {
-				// DPrintf("[Clerk](%d) Get args/reply from %v: args: %+v\nreply: %+v\n", ck.clientId, ck.currentLeader, args, reply)
+				util.Debug(util.DClient, "C%d Get args/reply, args: %+v\nreply: %+v", ck.clientId, args, reply)
 				return reply.Value
 			} else if reply.Err == ErrWrongLeader {
 				ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
@@ -72,7 +71,7 @@ func (ck *Clerk) Get(key string) string {
 				return ""
 			}
 		} else { // stalled RPC due to network issue, try on next server
-			// DPrintf("[Clerk](%d) Get timed out from %v\n", ck.clientId, ck.currentLeader)
+			util.Debug(util.DClient, "C%d Get timed out", ck.clientId)
 			ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
 		}
 		time.Sleep(ClientRetryInterval)
@@ -96,18 +95,18 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 
 	for {
 		reply := PutAppendReply{}
-		// DPrintf("[Clerk](%d) PutAppend to [%v], value: %v", ck.clientId, ck.currentLeader, value)
+		util.Debug(util.DClient, "C%d PutAppend, value: %v", ck.clientId, value)
 		ok := ck.servers[ck.currentLeader].Call("KVServer.PutAppend", &args, &reply)
 
 		if ok {
 			if reply.Err == OK {
-				// DPrintf("[Clerk](%d) PutAppend args/reply from %v: args: %+v\nreply: %+v\n", ck.clientId, ck.currentLeader, args, reply)
+				util.Debug(util.DClient, "C%d PutAppend args/reply, args: %+v\nreply: %+v", ck.clientId, args, reply)
 				return
 			} else if reply.Err == ErrWrongLeader {
 				ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
 			}
 		} else { // stalled RPC due to network issue, try on next server
-			// DPrintf("[Clerk](%d) PutAppend timed out from %v\n", ck.clientId, ck.currentLeader)
+			util.Debug(util.DClient, "C%d PutAppend timed out", ck.clientId)
 			ck.currentLeader = (ck.currentLeader + 1) % len(ck.servers)
 		}
 		time.Sleep(ClientRetryInterval)
